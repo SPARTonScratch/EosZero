@@ -1,5 +1,5 @@
 <center>
-# EosZero
+<bold>EosZero<bold>
 <img src="Thumbnail.png" width="500">
 </center>
 
