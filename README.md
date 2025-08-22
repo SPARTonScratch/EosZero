@@ -2,4 +2,4 @@
 Code for the EosZero Connect 4 engine!
 
 
-![testing...](Thumbnail.png)
+![testing...](Thumbnail.png {width=50px})
