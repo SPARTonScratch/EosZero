@@ -5,3 +5,5 @@
 
 ## General
 Code for the EosZero Connect 4 engine!
+
+Even though the [EosZero engine](https://scratch.mit.edu/projects/1206934247/) itself is on Scratch, the training for it's neural net was made on PyTorch.
