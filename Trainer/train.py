@@ -231,8 +231,8 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
     # ======================
     # 5. Training Setup
     # ======================
-    optimizer = optim.AdamW(model.parameters(), lr=0.05, weight_decay=2e-5, betas=(0.9, 0.999))
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+    optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=2e-5, betas=(0.9, 0.999))
+    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     policy_loss_fn = nn.KLDivLoss(reduction='batchmean')
     value_loss_fn = nn.MSELoss()
 
@@ -330,7 +330,7 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
                         epoch_val_policy_accuracy += correct_move_predictions
 
                         values_mae_val = abs(pred_v - values).mean()
-                        epoch_val_value_mae += values_mae_val
+                        epoch_val_value_mae += values_mae_val.item()
 
                 avg_val_policy_accuracy = epoch_val_policy_accuracy / len(val_set)
                 avg_val_value_mae = epoch_val_value_mae / len(val_loader)
@@ -481,7 +481,7 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
 
 if __name__ == "__main__":
     # --- User-definable parameters ---
-    NET_NAME = "PVN 1.10"
+    NET_NAME = "PVN 1.12"
     EPOCHS = 500
     BATCH_SIZE = 1024
     VAL_SPLIT = 0.2
