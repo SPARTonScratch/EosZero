@@ -69,7 +69,7 @@ class EosZeroNet(nn.Module):
             nn.Linear(85, 64),
             nn.ReLU(),
             nn.Linear(64, 32),
-            nn.ReLU(),
+            nn.ReLU()
         )
         self.policy_head = nn.Linear(32, 7)
         self.value_head = nn.Linear(32, 1)
@@ -169,7 +169,7 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
     np.random.seed(42)
 
     os.makedirs(CHECKPOINTS_BASE_DIR, exist_ok=True)
-    if device == "cpu":
+    if str(device) == "cpu":
         print(f"\nStarting Training on {use_threads} CPU Threads")
     else:
         print(f"\nStarting Training on GPU")
@@ -231,7 +231,7 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
     # ======================
     # 5. Training Setup
     # ======================
-    optimizer = optim.AdamW(model.parameters(), lr=0.015, weight_decay=2e-5, betas=(0.9, 0.999))
+    optimizer = optim.AdamW(model.parameters(), lr=0.05, weight_decay=2e-5, betas=(0.9, 0.999))
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
     policy_loss_fn = nn.KLDivLoss(reduction='batchmean')
     value_loss_fn = nn.MSELoss()
@@ -243,8 +243,12 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
     all_metrics = []
     train_losses = []
     val_losses = []
+    val_policy_accuracies = []
+    val_value_maes = [] # mean absolute errors
 
     timing_metrics = []
+
+    value_loss_strength = 0.9 # Total_loss = policy_loss_val + x * value_loss_val, 0.1 to 1 seems like a good range
 
     try:
         with trange(epochs, desc="Epochs") as pbar:
@@ -277,7 +281,7 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
                     value_loss_val = value_loss_fn(pred_v, values)
                     epoch_train_loss_value += value_loss_val
 
-                    total_loss = policy_loss_val + 0.2 * value_loss_val
+                    total_loss = policy_loss_val + value_loss_strength * value_loss_val
                     total_loss.backward()
 
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -300,6 +304,9 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
                 epoch_val_loss = 0.0
                 epoch_val_loss_policy = 0.0
                 epoch_val_loss_value = 0.0
+
+                epoch_val_policy_accuracy = 0.0
+                epoch_val_value_mae = 0.0 # mean absolute error
                 val_start_time = time.time()
                 with torch.no_grad():
                     for states, policies, values in val_loader:
@@ -314,8 +321,19 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
                         value_loss_val = value_loss_fn(pred_v, values)
                         epoch_val_loss_value += value_loss_val
 
-                        total_loss = policy_loss_val + 0.2 * value_loss_val
+                        total_loss = policy_loss_val + value_loss_strength * value_loss_val
                         epoch_val_loss += total_loss.item()
+
+                        predicted_moves = torch.argmax(pred_p, dim=1)
+                        ground_truth_moves = torch.argmax(policies, dim=1)
+                        correct_move_predictions = (predicted_moves == ground_truth_moves).sum().item()
+                        epoch_val_policy_accuracy += correct_move_predictions
+
+                        values_mae_val = abs(pred_v - values).mean()
+                        epoch_val_value_mae += values_mae_val
+
+                avg_val_policy_accuracy = epoch_val_policy_accuracy / len(val_set)
+                avg_val_value_mae = epoch_val_value_mae / len(val_loader)
 
                 val_end_time = time.time()
                 total_val_time = val_end_time - val_start_time
@@ -345,6 +363,8 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
 
                 train_losses.append(avg_train_loss)
                 val_losses.append(avg_val_loss)
+                val_policy_accuracies.append(avg_val_policy_accuracy * 100) # multiply by 100 to convert to percentage
+                val_value_maes.append(avg_val_value_mae)
 
                 checkpoint_dir = os.path.join(CHECKPOINTS_BASE_DIR, f"{net_name}_epoch_{epoch + 1}")
                 checkpoint_path = os.path.join(checkpoint_dir, f"{net_name}_epoch_{epoch + 1}.pth")
@@ -361,6 +381,8 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
                     "train_loss_policy": avg_train_loss_policy,
                     "val_loss_value": avg_val_loss_value,
                     "val_loss_policy": avg_val_loss_policy,
+                    "val_policy_accuracy": avg_val_policy_accuracy,
+                    "val_value_mae": avg_val_value_mae,
                     "lr": current_lr,
                     "model_path": checkpoint_path
                 })
@@ -409,8 +431,8 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
     try:
         import matplotlib.pyplot as plt
         plt.figure(figsize=(15, 10))
-        plt.plot(train_losses, label='Training')
-        plt.plot(val_losses, label='Validation')
+        plt.plot(train_losses, label='Training', color='royalblue')
+        plt.plot(val_losses, label='Validation', color='darkorange')
 
         ax = plt.gca()
 
@@ -421,8 +443,30 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
         plt.xlabel("Epochs")
         plt.ylabel("Loss")
         plt.legend()
+        plt.grid(True)
         plt.savefig(f"{BEST_NET_DIR}/training_curves_{net_name}.png")
         print(f"\nLoss curves saved to training_curves_{net_name}.png")
+
+        plt.figure(figsize=(15, 10))
+        plt.plot(val_policy_accuracies, label='Policy Accuracy', color='darkorange')
+        plt.title(f"Validation Policy Accuracy ({net_name})")
+        plt.xlabel("Epochs")
+        plt.ylabel("Accuracy (%)")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(f"{BEST_NET_DIR}/policy_accuracy_{net_name}.png")
+        print(f"Policy accuracy curve saved to policy_accuracy_{net_name}.png")
+
+        plt.figure(figsize=(15, 10))
+        plt.plot(val_value_maes, label='Value Prediction Error (MAE)', color='darkorange')
+        plt.title(f"Validation Value Prediction Error ({net_name})")
+        plt.xlabel("Epochs")
+        plt.ylabel("MAE")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(f"{BEST_NET_DIR}/value_prediction_error_{net_name}.png")
+        print(f"Value error curve saved to value_prediction_error_{net_name}.png")
+
     except ImportError:
         print("\nMatplotlib not found. Cannot save loss curves.")
 
@@ -437,8 +481,8 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
 
 if __name__ == "__main__":
     # --- User-definable parameters ---
-    NET_NAME = "PVN 1.01 (testing)"
-    EPOCHS = 5
+    NET_NAME = "PVN 1.10"
+    EPOCHS = 500
     BATCH_SIZE = 1024
     VAL_SPLIT = 0.2
     SAVE_RATE = 10
