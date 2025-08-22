@@ -3,4 +3,5 @@
 <img src="Thumbnail.png" width="250">
 </div>
 
+## General
 Code for the EosZero Connect 4 engine!
