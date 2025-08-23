@@ -237,7 +237,7 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
         {"init_lr": 0.015, "scheduler": "cosine_annealing", "eta_min_lr": 1e-5, "cycle": epochs},
         {"init_lr": 0.008, "scheduler": "step_lr", "step_size": 125, "gamma": 0.5},
         {"init_lr": 0.015, "scheduler": "cosine_annealing_restart", "eta_min_lr": 2e-5, "cycle": math.ceil(epochs / 6.25), "t_mult": 2},
-        {"init_lr": 0.012, "scheduler": "cosine_annealing_restart", "eta_min_lr": 1e-5, "cycle": math.ceil(epochs / 6.25), "t_mult": 2}
+        {"init_lr": 0.010, "scheduler": "cosine_annealing_restart", "eta_min_lr": 5e-6, "cycle": math.floor(epochs / 7), "t_mult": 2}
     ]
 
     use_training_config = 3
@@ -248,6 +248,9 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
     step_size = training_configs[use_training_config].get("step_size")
     step_lr_gamma = training_configs[use_training_config].get("gamma")
     cycle_len = training_configs[use_training_config].get("cycle")
+    if cycle_len == 0:
+        cycle_len = epochs
+        print(f"Cycle len set to: {cycle_len} due to invalid val")
     cycle_mult = training_configs[use_training_config].get("t_mult")
 
     print(f"Training Configs: {training_configs[use_training_config]}")
@@ -311,11 +314,11 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
 
                     log_probs = F.log_softmax(pred_p, dim=1)
                     policy_loss_val = policy_loss_fn(log_probs, policies)
-                    epoch_train_loss_policy += policy_loss_val
+                    epoch_train_loss_policy += policy_loss_val.item()
 
                     pred_v = torch.tanh(pred_v)
                     value_loss_val = value_loss_fn(pred_v, values)
-                    epoch_train_loss_value += value_loss_val
+                    epoch_train_loss_value += value_loss_val.item()
 
                     total_loss = policy_loss_val + value_loss_strength * value_loss_val
                     total_loss.backward()
@@ -351,11 +354,11 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
 
                         log_probs = F.log_softmax(pred_p, dim=1)
                         policy_loss_val = policy_loss_fn(log_probs, policies)
-                        epoch_val_loss_policy += policy_loss_val
+                        epoch_val_loss_policy += policy_loss_val.item()
 
                         pred_v = torch.tanh(pred_v)
                         value_loss_val = value_loss_fn(pred_v, values)
-                        epoch_val_loss_value += value_loss_val
+                        epoch_val_loss_value += value_loss_val.item()
 
                         total_loss = policy_loss_val + value_loss_strength * value_loss_val
                         epoch_val_loss += total_loss.item()
@@ -373,6 +376,8 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
 
                 val_end_time = time.time()
                 total_val_time = val_end_time - val_start_time
+
+                current_lr = optimizer.param_groups[0]['lr'] # let's set the logging lr before the scheduler changes it
 
                 scheduler.step()
 
@@ -394,8 +399,6 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
 
                 avg_val_loss_value = get_avg_loss_val(epoch_val_loss_value)
                 avg_val_loss_policy = get_avg_loss_val(epoch_val_loss_value)
-
-                current_lr = optimizer.param_groups[0]['lr']
 
                 train_losses.append(avg_train_loss)
                 val_losses.append(avg_val_loss)
@@ -457,7 +460,7 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
                     torch.save(model.state_dict(), best_net_path)
 
                 # Create a new directory for this epoch's checkpoint if the net should be saved now
-                if epoch == (epochs - 1) or (epoch + 1) % SAVE_RATE == 0:
+                if epoch + 1 == epochs or (epoch + 1) % SAVE_RATE == 0:
                     os.makedirs(checkpoint_dir, exist_ok=True)
                     torch.save(model.state_dict(), checkpoint_path)
 
@@ -465,11 +468,15 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
         print("\nTraining interrupted! (However, no checkpoints will be lost)")
 
     # --- Plotting functionality ---
+    # Create a list of epoch numbers from 1 to the total number of epochs
+    epochs_range = range(1, epochs + 1)
+
     try:
         import matplotlib.pyplot as plt
         plt.figure(figsize=(15, 10))
-        plt.plot(train_losses, label='Training', color='royalblue')
-        plt.plot(val_losses, label='Validation', color='darkorange')
+        # Pass epochs_range as the x-axis values
+        plt.plot(epochs_range, train_losses, label='Training', color='royalblue')
+        plt.plot(epochs_range, val_losses, label='Validation', color='darkorange')
 
         ax = plt.gca()
 
@@ -485,7 +492,8 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
         print(f"\nLoss curves saved to training_curves_{net_name}.png")
 
         plt.figure(figsize=(15, 10))
-        plt.plot(val_policy_accuracies, label='Policy Accuracy', color='darkorange')
+        # Pass epochs_range as the x-axis values
+        plt.plot(epochs_range, val_policy_accuracies, label='Policy Accuracy', color='darkorange')
         plt.title(f"Validation Policy Accuracy ({net_name})")
         plt.xlabel("Epochs")
         plt.ylabel("Accuracy (%)")
@@ -495,7 +503,8 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
         print(f"Policy accuracy curve saved to policy_accuracy_{net_name}.png")
 
         plt.figure(figsize=(15, 10))
-        plt.plot(val_value_maes, label='Value Prediction Error (MAE)', color='darkorange')
+        # Pass epochs_range as the x-axis values
+        plt.plot(epochs_range, val_value_maes, label='Value Prediction Error (MAE)', color='darkorange')
         plt.title(f"Validation Value Prediction Error ({net_name})")
         plt.xlabel("Epochs")
         plt.ylabel("MAE")
@@ -505,7 +514,8 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
         print(f"Value error curve saved to value_prediction_error_{net_name}.png")
 
         plt.figure(figsize=(15, 10))
-        plt.plot(lr_values, label='Training Learn Rate', color='royalblue')
+        # Pass epochs_range as the x-axis values
+        plt.plot(epochs_range, lr_values, label='Training Learn Rate', color='royalblue')
         plt.title(f"Training Learn Rate ({net_name})")
         plt.xlabel("Epochs")
         plt.ylabel("Learn Rate")
@@ -534,13 +544,19 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
         json.dump(training_settings_dump, f, indent=2)
     print(f"Training settings saved to {training_settings_path}")
 
+    # --- Export all metrics to a JSON file ---
+    all_metrics_path = os.path.join(BEST_NET_DIR, "all_metrics.json")
+    with open(all_metrics_path, "w") as f:
+        json.dump(all_metrics, f, indent=2)
+    print(f"All metrics saved to {all_metrics_path}")
+
     return all_metrics
 
 
 if __name__ == "__main__":
     # --- User-definable parameters ---
-    NET_NAME = "PVN 1.20"
-    EPOCHS = 500
+    NET_NAME = "PVN 1.25"
+    EPOCHS = 1000
     BATCH_SIZE = 1024
     VAL_SPLIT = 0.2
     SAVE_RATE = 10
@@ -559,14 +575,14 @@ if __name__ == "__main__":
     VISITS_FILE = "data/_Selfgen EosZero Run Move Visits.txt"
     OUTCOMES_FILE = "data/_Selfgen EosZero Run Game Outcomes.txt"
 
-    all_metrics = train(STATES_FILE, VISITS_FILE, OUTCOMES_FILE,
+    trained_metrics = train(STATES_FILE, VISITS_FILE, OUTCOMES_FILE,
                         net_name=NET_NAME,
                         epochs=EPOCHS,
                         batch_size=BATCH_SIZE,
                         val_split=VAL_SPLIT)
 
-    if all_metrics:
-        best_metric = all_metrics[lowest_val_loss_epoch - 1]
+    if trained_metrics:
+        best_metric = trained_metrics[lowest_val_loss_epoch - 1] # since lists are zero-indexed, we must subtract 1 from epoch
 
         best_model_table_width = max(50, len(BEST_NET_PATH) + 5)
         generate_table_row(["-", "-"], best_model_table_width)
