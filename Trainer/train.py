@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import TensorDataset, DataLoader, random_split
 from tqdm import trange
 import matplotlib
@@ -231,8 +232,42 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
     # ======================
     # 5. Training Setup
     # ======================
-    optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=2e-5, betas=(0.9, 0.999))
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+
+    training_configs = [
+        {"init_lr": 0.015, "scheduler": "cosine_annealing", "eta_min_lr": 1e-5, "cycle": epochs},
+        {"init_lr": 0.008, "scheduler": "step_lr", "step_size": 125, "gamma": 0.5},
+        {"init_lr": 0.015, "scheduler": "cosine_annealing_restart", "eta_min_lr": 2e-5, "cycle": math.ceil(epochs / 6.25), "t_mult": 2},
+        {"init_lr": 0.012, "scheduler": "cosine_annealing_restart", "eta_min_lr": 1e-5, "cycle": math.ceil(epochs / 6.25), "t_mult": 2}
+    ]
+
+    use_training_config = 3
+
+    init_lr = training_configs[use_training_config].get("init_lr")
+    scheduler_type = training_configs[use_training_config].get("scheduler")
+    eta_min_lr = training_configs[use_training_config].get("eta_min_lr")
+    step_size = training_configs[use_training_config].get("step_size")
+    step_lr_gamma = training_configs[use_training_config].get("gamma")
+    cycle_len = training_configs[use_training_config].get("cycle")
+    cycle_mult = training_configs[use_training_config].get("t_mult")
+
+    print(f"Training Configs: {training_configs[use_training_config]}")
+
+    optimizer = optim.AdamW(model.parameters(), lr=init_lr, weight_decay=2e-5, betas=(0.9, 0.999))
+
+    if scheduler_type == "step_lr":
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=step_lr_gamma)
+
+    elif scheduler_type == "cosine_annealing":
+        scheduler = CosineAnnealingLR(optimizer, T_max=cycle_len, eta_min=eta_min_lr)
+
+    else:
+        scheduler = CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=cycle_len,
+            T_mult=cycle_mult,
+            eta_min=eta_min_lr
+        )
+
     policy_loss_fn = nn.KLDivLoss(reduction='batchmean')
     value_loss_fn = nn.MSELoss()
 
@@ -245,6 +280,7 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
     val_losses = []
     val_policy_accuracies = []
     val_value_maes = [] # mean absolute errors
+    lr_values = []
 
     timing_metrics = []
 
@@ -365,6 +401,7 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
                 val_losses.append(avg_val_loss)
                 val_policy_accuracies.append(avg_val_policy_accuracy * 100) # multiply by 100 to convert to percentage
                 val_value_maes.append(avg_val_value_mae)
+                lr_values.append(current_lr)
 
                 checkpoint_dir = os.path.join(CHECKPOINTS_BASE_DIR, f"{net_name}_epoch_{epoch + 1}")
                 checkpoint_path = os.path.join(checkpoint_dir, f"{net_name}_epoch_{epoch + 1}.pth")
@@ -467,6 +504,16 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
         plt.savefig(f"{BEST_NET_DIR}/value_prediction_error_{net_name}.png")
         print(f"Value error curve saved to value_prediction_error_{net_name}.png")
 
+        plt.figure(figsize=(15, 10))
+        plt.plot(lr_values, label='Training Learn Rate', color='royalblue')
+        plt.title(f"Training Learn Rate ({net_name})")
+        plt.xlabel("Epochs")
+        plt.ylabel("Learn Rate")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(f"{BEST_NET_DIR}/training_learn_rate_{net_name}.png")
+        print(f"Learn rate curve saved to training_learn_rate_{net_name}.png")
+
     except ImportError:
         print("\nMatplotlib not found. Cannot save loss curves.")
 
@@ -476,12 +523,23 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
         json.dump(timing_metrics, f, indent=2)
     print(f"Timing metrics saved to {timing_path}")
 
+    training_settings_dump = [
+        f"Net Name: {net_name}",
+        f"Training Configs: {training_configs[use_training_config]}"
+    ]
+
+    # --- Export training settings to a JSON file ---
+    training_settings_path = os.path.join(BEST_NET_DIR, "training_settings.json")
+    with open(training_settings_path, "w") as f:
+        json.dump(training_settings_dump, f, indent=2)
+    print(f"Training settings saved to {training_settings_path}")
+
     return all_metrics
 
 
 if __name__ == "__main__":
     # --- User-definable parameters ---
-    NET_NAME = "PVN 1.12"
+    NET_NAME = "PVN 1.20"
     EPOCHS = 500
     BATCH_SIZE = 1024
     VAL_SPLIT = 0.2
