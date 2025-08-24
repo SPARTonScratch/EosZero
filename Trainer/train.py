@@ -2,6 +2,7 @@ import os
 import time
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
@@ -63,33 +64,63 @@ class EosZeroNet(nn.Module):
     """
     Neural Network architecture for Connect 4 policy and value prediction.
     """
-
     def __init__(self):
         super().__init__()
         self.shared = nn.Sequential(
-            nn.Linear(85, 64),
+            nn.Linear(85, 128),
             nn.ReLU(),
-            nn.Linear(64, 32),
+        )
+
+        # Policy-specific processing branch
+        self.policy_intermediate = nn.Sequential(
+            nn.Linear(128, 16),
             nn.ReLU()
         )
-        self.policy_head = nn.Linear(32, 7)
-        self.value_head = nn.Linear(32, 1)
+        self.policy_head = nn.Linear(16, 7)
+
+        # Value-specific processing branch
+        self.value_intermediate = nn.Sequential(
+            nn.Linear(128, 8),
+            nn.ReLU()
+        )
+        self.value_head = nn.Linear(8, 1)
+
         self._initialize_weights()
 
     def _initialize_weights(self):
+        # Initialize weights for the shared layers
         for layer in self.shared:
             if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight, nonlinearity='relu')
-                nn.init.constant_(layer.bias, 0.1)
-        nn.init.normal_(self.policy_head.weight, std=0.01)
-        nn.init.constant_(self.policy_head.bias, 0.0)
-        nn.init.normal_(self.value_head.weight, std=0.01)
-        nn.init.constant_(self.value_head.bias, 0.0)
+                init.kaiming_normal_(layer.weight, nonlinearity='relu')
+                init.constant_(layer.bias, 0.1)
+
+        # Initialize weights for the policy branch
+        for layer in self.policy_intermediate:
+            if isinstance(layer, nn.Linear):
+                init.kaiming_normal_(layer.weight, nonlinearity='relu')
+                init.constant_(layer.bias, 0.1)
+        init.normal_(self.policy_head.weight, std=0.01)
+        init.constant_(self.policy_head.bias, 0.0)
+
+        # Initialize weights for the value branch
+        for layer in self.value_intermediate:
+            if isinstance(layer, nn.Linear):
+                init.kaiming_normal_(layer.weight, nonlinearity='relu')
+                init.constant_(layer.bias, 0.1)
+        init.normal_(self.value_head.weight, std=0.01)
+        init.constant_(self.value_head.bias, 0.0)
 
     def forward(self, x):
+        # Pass input through the shared layers
         shared_features = self.shared(x)
-        policy = self.policy_head(shared_features)
-        value = self.value_head(shared_features)
+
+        policy_features = self.policy_intermediate(shared_features)
+        value_features = self.value_intermediate(shared_features)
+
+        # Final prediction heads
+        policy = self.policy_head(policy_features)
+        value = self.value_head(value_features)
+
         return policy, value
 
 
@@ -555,7 +586,7 @@ def train(states_file, visits_file, outcomes_file, net_name="EosZeroNet", epochs
 
 if __name__ == "__main__":
     # --- User-definable parameters ---
-    NET_NAME = "PVN 1.25"
+    NET_NAME = "PVN 1.32"
     EPOCHS = 1000
     BATCH_SIZE = 1024
     VAL_SPLIT = 0.2
